@@ -1,121 +1,76 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Created on Fri Nov  8 11:57:39 2024
+Created on Tue Nov 12 15:43:21 2024
 
 @author: constantinesun
 """
+
 import numpy as np
+import cvxpy as cp
 import matplotlib.pyplot as plt
-from cvxopt import matrix, solvers
 
-# Parameter settings
-N = 30  # Number of time steps
-dt = 0.05  # Time step size
-xd = np.array([2, 1])  # Target position
-x_init = np.array([0, 1])  # Initial position of the manipulator
-xdot_init = np.array([0.1, 0.1])  # Initial velocity
-p_init = np.array([0, 0])  # Initial position of the obstacle
-p_velocity = np.array([0.25, 0.25])  # Obstacle velocity
-Q = np.eye(2)  # State weight matrix
-R = 0.1  # Control weight
-v_max = 1  # Maximum velocity
+# System parameters
+dt = 0.1  # Time step
+N = 50  # Prediction horizon
+x0 = np.array([1, 1, 0, 0])  # Initial state
+XD = np.array([5, 5, 0, 0])  # Desired final state
+v_max = 5  # Velocity limit
+a_max = 5  # Acceleration limit
 
-epsilon = 0.1  # Safety distance
+# State space model matrices
+A = np.array([[1, 0, dt, 0],
+              [0, 1, 0, dt],
+              [0, 0, 1, 0],
+              [0, 0, 0, 1]])
+B = np.array([[0], [0], [dt], [dt]])
 
-# Initialization of state and control variables
-x = np.zeros((N + 1, 2))
-x[0] = x_init
-xdot = np.zeros((N + 1, 2))
-xdot[0] = xdot_init
-u = np.zeros((N, 2))
+# Weight matrices for the cost function
+Q = np.diag([10, 10, 1, 1])  # State error penalty
+R = np.array([[1]])  # Control effort penalty
 
-# Initialization of obstacle position
-p = np.zeros((N + 1, 2))
-p[0] = p_init
-for i in range(1, N + 1):
-    if np.all(p[i - 1] < [1, 1]):
-        p[i] = p[i - 1] + p_velocity
-    else:
-        p[i] = p[i - 1]
+# Optimization variables
+x = cp.Variable((4, N + 1))
+u = cp.Variable((1, N))
 
-# Construct QP problem
-P = np.zeros((2 * N, 2 * N))
-q = np.zeros(2 * N)
-A = []
-b = []
+# Cost function and constraints
+cost = 0
+constraints = [x[:, 0] == x0]
+for k in range(N):
+    cost += cp.quad_form(x[:, k] - XD, Q) + cp.quad_form(u[:, k], R)
+    constraints += [x[:, k + 1] == A @ x[:, k] + B @ u[:, k]]
+    constraints += [cp.norm(u[:, k], 'inf') <= a_max]
+    constraints += [cp.norm(x[2:4, k], 'inf') <= v_max]  # Velocity constraints
 
-# Objective function matrix P and vector q
-for i in range(N):
-    P[2 * i:2 * i + 2, 2 * i:2 * i + 2] = R * np.eye(2)
-    q[2 * i:2 * i + 2] = -2 * Q @ xd
+# Terminal cost
+cost += cp.quad_form(x[:, N] - XD, Q)
 
-# Add terminal state cost
-P_terminal = 20 * Q  # Increase terminal state weight
-P[-2:, -2:] += P_terminal
+# Solve the optimization problem
+prob = cp.Problem(cp.Minimize(cost), constraints)
+prob.solve()
 
-# Constraint matrices A and vector b
-for i in range(N):
-    # System dynamics constraints for velocity and position updates
-    Ai_dyn = np.zeros((2, 2 * N))
-    # Velocity update constraint: xdot[i+1] = xdot[i] + u[i] * dt
-    Ai_dyn[0, 2 * i:2 * i + 2] = -dt
-    Ai_dyn[1, 2 * i:2 * i + 2] = -dt
-    A.append(Ai_dyn[0])
-    A.append(Ai_dyn[1])
-    b.append(0)
-    b.append(0)
-for i in range(N - 1):
-    # System dynamics constraints for state evolution
-    Ai_state = np.zeros((2, 2 * N))
-    # Position update constraint: x[i+1] = x[i] + xdot[i] * dt
-    Ai_state[0, 2 * i] = -1
-    Ai_state[1, 2 * i + 1] = -1
-    Ai_state[0, 2 * (i + 1)] = 1
-    Ai_state[1, 2 * (i + 1) + 1] = 1
-    A.append(Ai_state[0])
-    A.append(Ai_state[1])
-    b.append(0)
-    b.append(0)
+# Extract the optimal trajectory
+x_opt = x.value
 
-    # Velocity constraints
-    Ai = np.zeros((1, 2 * N))
-    Ai[0, 2 * i:2 * i + 2] = np.array([1, 1])
-    A.append(Ai)
-    b.append(v_max)
-    # Obstacle distance constraint to ensure a safety distance from the obstacle
-    Ai_dist = np.zeros((1, 2 * N))
-    if i < N - 1:
-        diff = x[i] - p[i + 1]
-    else:
-        diff = x[i] - p[i]  # Use current position for the last step to avoid out of bounds
-    Ai_dist[0, 2 * i:2 * i + 2] = -2 * diff
-    A.append(Ai_dist)
-    b.append(-epsilon ** 2 + np.dot(diff, diff))
-
-P = matrix(P)
-q = matrix(q)
-A = matrix(np.vstack(A))
-b = matrix(np.array(b))
-
-# Use QP solver
-sol = solvers.qp(P, q, A, b)
-if sol['status'] == 'optimal':
-    u_opt = np.array(sol['x']).reshape(N, 2)
-    # Update state trajectory
-    for i in range(N):
-        xdot[i + 1] = xdot[i] + u_opt[i] * dt
-        x[i + 1] = x[i] + xdot[i] * dt
-else:
-    print("Optimization did not converge")
-
-# Plot trajectory
-plt.plot(x[:, 0], x[:, 1], 'b-o', label='Manipulator Trajectory')
-plt.plot(p[:, 0], p[:, 1], 'r--', label='Obstacle Trajectory')
-plt.plot(xd[0], xd[1], 'gx', markersize=10, label='Target Position')
-plt.xlabel('X Direction')
-plt.ylabel('Y Direction')
+# Plot the trajectory
+plt.figure(figsize=(10, 6))
+plt.plot(x_opt[0, :], x_opt[1, :], 'b-o', label='Optimal Trajectory')
+plt.plot(XD[0], XD[1], 'rx', markersize=10, label='Target Position')
+plt.xlabel('x position')
+plt.ylabel('y position')
+plt.title('MPC Optimal Trajectory')
 plt.legend()
 plt.grid(True)
-plt.title('Manipulator and Obstacle Trajectory')
+plt.axis('equal')
+plt.show()
+
+# Plot position over time
+plt.figure(figsize=(10, 6))
+plt.plot(np.arange(N + 1) * dt, x_opt[0, :], 'b-', label='x position')
+plt.plot(np.arange(N + 1) * dt, x_opt[1, :], 'r-', label='y position')
+plt.xlabel('Time (s)')
+plt.ylabel('Position')
+plt.title('Position Over Time')
+plt.legend()
+plt.grid(True)
 plt.show()
