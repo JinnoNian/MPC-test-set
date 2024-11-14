@@ -11,12 +11,12 @@ import matplotlib.pyplot as plt
 
 # Parameters
 dt = 0.1  # time step
-N = 20  # prediction horizon
+N = 30  # prediction horizon
 max_velocity = 5
 max_acceleration = 5
 xd = np.array([5, 5])  # target destination
 obt = np.array([3, 3])  # obstacle position
-epsilon = 0.1  # safety distance
+epsilon = 0.5  # safety distance
 
 # Weights for cost function
 Q = np.diag([10, 10, 1, 1])  # state penalty
@@ -73,10 +73,13 @@ for k in range(N):
     X = A @ X + B * optimal_u[k]
     trajectory.append(X[:2])
 
-trajectory = np.array(trajectory)
+tra = [np.array(point).flatten() for point in trajectory]
+tra = np.array(tra)
+
+print(tra)
 
 # Plot trajectory
-plt.plot(trajectory[:, 0], trajectory[:, 1], '-o', label='Trajectory')
+plt.plot(tra[:, 0], tra[:, 1], '-o', label='Trajectory')
 plt.scatter(x0[0], x0[1], color='green', label='Start', marker='x')
 plt.scatter(xd[0], xd[1], color='red', label='Target', marker='*')
 plt.scatter(obt[0], obt[1], color='blue', label='Obstacle', marker='s')
